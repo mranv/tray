@@ -20,15 +20,16 @@ use objc::sel_impl;
 use objc::runtime::{Object, Sel};
 
 //
-// GLOBAL_POPOVER: Global mutable storage for our NSPopover instance.
+// GLOBAL_POPOVER: Global storage for our NSPopover instance.
 //
 static mut GLOBAL_POPOVER: id = nil;
 
 //
-// togglePopover: Called by our custom delegate to toggle (show/hide) the popover.
+// toggle_popover: Called by our toggle delegate to show or hide the popover.
+// 'sender' is expected to be the NSStatusItem's button.
 //
 #[no_mangle]
-extern "C" fn togglePopover(_this: &Object, _cmd: Sel, sender: id) -> () {
+extern "C" fn toggle_popover(_this: &Object, _cmd: Sel, sender: id) -> () {
     unsafe {
         if GLOBAL_POPOVER != nil {
             let is_shown: i32 = msg_send![GLOBAL_POPOVER, isShown];
@@ -43,7 +44,7 @@ extern "C" fn togglePopover(_this: &Object, _cmd: Sel, sender: id) -> () {
 }
 
 //
-// create_toggle_delegate: Creates a custom Objective-C delegate that implements togglePopover:.
+// create_toggle_delegate: Creates a custom Objective-C delegate that implements toggle_popover:.
 //
 fn create_toggle_delegate() -> id {
     use objc::declare::ClassDecl;
@@ -52,7 +53,7 @@ fn create_toggle_delegate() -> id {
     unsafe {
         decl.add_method(
             sel!(togglePopover:),
-            togglePopover as extern "C" fn(&Object, Sel, id) -> (),
+            toggle_popover as extern "C" fn(&Object, Sel, id) -> (),
         );
     }
     decl.register();
@@ -60,11 +61,47 @@ fn create_toggle_delegate() -> id {
 }
 
 //
-// create_popover_content_view: Constructs the popover's content view.
-// This view includes a blurred background, a header, a scrollable list of dummy rows with varied icons,
-// and a footer with a logo, version label, and refresh button.
-// All text fields use the dynamic label color for proper dark/light mode support.
+// show_alert: Displays an NSAlert with a title and message.
+// This is called when the Alert button is pressed.
 //
+extern "C" fn show_alert(_this: &Object, _cmd: Sel, _sender: id) -> () {
+    unsafe {
+        let alert: id = msg_send![class!(NSAlert), new];
+        let title = NSString::alloc(nil).init_str("Test Alert");
+        let message = NSString::alloc(nil).init_str("This is a test alert.");
+        let _: () = msg_send![alert, setMessageText: title];
+        let _: () = msg_send![alert, setInformativeText: message];
+        let _: () = msg_send![alert, addButtonWithTitle: NSString::alloc(nil).init_str("OK")];
+        let _: i32 = msg_send![alert, runModal];
+    }
+}
+
+//
+// create_alert_delegate: Creates a delegate object that implements show_alert:.
+//
+fn create_alert_delegate() -> id {
+    use objc::declare::ClassDecl;
+    let superclass = class!(NSObject);
+    let mut decl = ClassDecl::new("AlertDelegate", superclass).unwrap();
+    unsafe {
+        decl.add_method(
+            sel!(showAlert:),
+            show_alert as extern "C" fn(&Object, Sel, id) -> (),
+        );
+    }
+    decl.register();
+    unsafe { msg_send![class!(AlertDelegate), new] }
+}
+
+//
+// create_popover_content_view: Constructs the popover's content view.
+// The view includes:
+//   - A blurred background (using NSVisualEffectView)
+//   - A header with the text "Security Status"
+//   - A scrollable list of dummy rows (each row shows a system icon and label)
+//   - A footer with a logo, version label, an "Alert" button, and a "Refresh" button
+//
+// All colors and fonts use system defaults so that dark/light mode is supported automatically.
 fn create_popover_content_view() -> id {
     unsafe {
         // Main content view.
@@ -72,10 +109,10 @@ fn create_popover_content_view() -> id {
         let content_view: id = msg_send![class!(NSView), alloc];
         let content_view: id = msg_send![content_view, initWithFrame: frame];
 
-        // --- Background: NSVisualEffectView ---
+        // --- Background: NSVisualEffectView for blur ---
         let effect_view: id = msg_send![class!(NSVisualEffectView), alloc];
         let effect_view: id = msg_send![effect_view, initWithFrame: frame];
-        // Use material 6 ("popover" style) for a refined look in light mode.
+        // Use material 6 ("popover" style) – works well in light mode.
         let _: () = msg_send![effect_view, setMaterial: 6];
         let _: () = msg_send![effect_view, setBlendingMode: 0];
         let _: () = msg_send![effect_view, setState: 1];
@@ -87,10 +124,10 @@ fn create_popover_content_view() -> id {
         let header: id = msg_send![header, initWithFrame: header_frame];
         let header_str = NSString::alloc(nil).init_str("Security Status");
         let _: () = msg_send![header, setStringValue: header_str];
-        // Use a bold system font (16pt) via NSFont.
+        // Bold system font (16pt).
         let header_font: id = msg_send![class!(NSFont), boldSystemFontOfSize: 16.0];
         let _: () = msg_send![header, setFont: header_font];
-        // Set text color to the dynamic label color.
+        // Use dynamic text color.
         let label_color: id = msg_send![class!(NSColor), labelColor];
         let _: () = msg_send![header, setTextColor: label_color];
         let _: () = msg_send![header, setBezeled: NO];
@@ -114,7 +151,7 @@ fn create_popover_content_view() -> id {
         let doc_view: id = msg_send![class!(NSView), alloc];
         let doc_view: id = msg_send![doc_view, initWithFrame: doc_frame];
 
-        // Array of system icons for variety.
+        // Dummy rows with varied system icons.
         let icons = ["doc.text", "exclamationmark.circle", "checkmark.circle", "questionmark"];
         for i in 0..4 {
             let row_y = 240.0 - ((i + 1) as f64 * 50.0);
@@ -122,7 +159,7 @@ fn create_popover_content_view() -> id {
             let row: id = msg_send![class!(NSView), alloc];
             let row: id = msg_send![row, initWithFrame: row_frame];
 
-            // Icon for the row.
+            // Icon.
             let icon_frame = NSRect::new(NSPoint::new(10.0, 10.0), NSSize::new(20.0, 20.0));
             let icon_view: id = msg_send![class!(NSImageView), alloc];
             let icon_view: id = msg_send![icon_view, initWithFrame: icon_frame];
@@ -132,7 +169,7 @@ fn create_popover_content_view() -> id {
             let _: () = msg_send![icon_img, setTemplate: YES];
             let _: () = msg_send![row, addSubview: icon_view];
 
-            // Label for the row.
+            // Label.
             let label_frame = NSRect::new(NSPoint::new(35.0, 10.0), NSSize::new(250.0, 20.0));
             let label: id = msg_send![class!(NSTextField), alloc];
             let label: id = msg_send![label, initWithFrame: label_frame];
@@ -147,7 +184,7 @@ fn create_popover_content_view() -> id {
             let _: () = msg_send![label, setSelectable: NO];
             let _: () = msg_send![row, addSubview: label];
 
-            // Circular indicator on the right.
+            // Circular indicator.
             let circle_frame = NSRect::new(NSPoint::new(320.0, 10.0), NSSize::new(20.0, 20.0));
             let circle: id = msg_send![class!(NSView), alloc];
             let circle: id = msg_send![circle, initWithFrame: circle_frame];
@@ -193,17 +230,28 @@ fn create_popover_content_view() -> id {
         let _: () = msg_send![version, setSelectable: NO];
         let _: () = msg_send![footer, addSubview: version];
 
+        // Alert button.
+        let alert_frame = NSRect::new(NSPoint::new(260.0, 20.0), NSSize::new(60.0, 30.0));
+        let alert_btn: id = msg_send![class!(NSButton), alloc];
+        let alert_btn: id = msg_send![alert_btn, initWithFrame: alert_frame];
+        let alert_title = NSString::alloc(nil).init_str("Alert");
+        let _: () = msg_send![alert_btn, setTitle: alert_title];
+        let alert_delegate = create_alert_delegate();
+        let _: () = msg_send![alert_btn, setTarget: alert_delegate];
+        let _: () = msg_send![alert_btn, setAction: sel!(showAlert:)];
+        let _: () = msg_send![footer, addSubview: alert_btn];
+
         // Refresh button.
-        let button_frame = NSRect::new(NSPoint::new(320.0, 20.0), NSSize::new(60.0, 30.0));
+        let refresh_frame = NSRect::new(NSPoint::new(320.0, 20.0), NSSize::new(60.0, 30.0));
         let refresh: id = msg_send![class!(NSButton), alloc];
-        let refresh: id = msg_send![refresh, initWithFrame: button_frame];
-        let btn_title = NSString::alloc(nil).init_str("Refresh");
-        let _: () = msg_send![refresh, setTitle: btn_title];
+        let refresh: id = msg_send![refresh, initWithFrame: refresh_frame];
+        let refresh_title = NSString::alloc(nil).init_str("Refresh");
+        let _: () = msg_send![refresh, setTitle: refresh_title];
+        // TODO: Implement refresh functionality.
         let _: () = msg_send![footer, addSubview: refresh];
 
         let _: () = msg_send![content_view, addSubview: footer];
 
-        // Do not force an explicit appearance; the UI will follow the system.
         content_view
     }
 }
@@ -242,10 +290,7 @@ fn setup_status_item_and_popover() {
         let vc = create_popover_view_controller();
         let _: () = msg_send![popover, setContentViewController: vc];
 
-        // Store the popover globally.
-        unsafe {
-            GLOBAL_POPOVER = popover;
-        }
+        GLOBAL_POPOVER = popover;
 
         // Create a toggle delegate.
         let toggle_delegate: id = create_toggle_delegate();
