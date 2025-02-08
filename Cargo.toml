@@ -1,11 +1,12 @@
 [package]
 name = "tray"
 version = "0.1.0"
-edition = "2021"
+edition = "2018"
 
 [dependencies]
-cocoa = "0.24"      # Check for the latest version on crates.io
+cocoa = "0.24"
 objc = "0.2"
 
 [package.metadata.bundle]
 identifier = "com.example.tray"
+# icon = "resources/icon.icns"  # Optionally specify an icon file

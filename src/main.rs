@@ -7,14 +7,12 @@ extern crate objc;
 use cocoa::appkit::{
     NSApplication,
     NSStatusBar,
-    NSMenu,
-    NSMenuItem,
     NSRunningApplication,
     NSApplicationActivateIgnoringOtherApps,
     NSVariableStatusItemLength,
 };
-use cocoa::base::{id, nil};
-use cocoa::foundation::{NSAutoreleasePool, NSString};
+use cocoa::base::{id, nil, NO, YES};
+use cocoa::foundation::{NSAutoreleasePool, NSRect, NSSize, NSPoint, NSString};
 
 use objc::class;
 use objc::msg_send;
@@ -23,149 +21,231 @@ use objc::sel_impl;
 use objc::runtime::{Object, Sel};
 
 //
-// Helper: Send a notification using the (deprecated) NSUserNotificationCenter API
+// GLOBAL_POPOVER: a mutable global to store the NSPopover instance.
 //
-// Note: Notifications from a command‑line tool (or non‑bundled app) may not appear!
+static mut GLOBAL_POPOVER: id = nil;
+
 //
-fn send_notification(title: &str, message: &str) {
+// togglePopover: This function is called by the toggle delegate when the tray button is clicked.
+// It toggles the global popover (if shown, it closes it; if hidden, it shows it).
+//
+#[no_mangle]
+extern "C" fn togglePopover(_this: &Object, _cmd: Sel, sender: id) -> () {
     unsafe {
-        let center: id =
-            msg_send![class!(NSUserNotificationCenter), defaultUserNotificationCenter];
-        let notification: id = msg_send![class!(NSUserNotification), new];
-        let ns_title = NSString::alloc(nil).init_str(title);
-        let ns_message = NSString::alloc(nil).init_str(message);
-        let _: () = msg_send![notification, setTitle: ns_title];
-        let _: () = msg_send![notification, setInformativeText: ns_message];
-        let _: () = msg_send![center, deliverNotification: notification];
+        if GLOBAL_POPOVER != nil {
+            let is_shown: i32 = msg_send![GLOBAL_POPOVER, isShown];
+            if is_shown != 0 {
+                let _: () = msg_send![GLOBAL_POPOVER, close];
+            } else {
+                let bounds: NSRect = msg_send![sender, bounds];
+                let _: () = msg_send![GLOBAL_POPOVER, showRelativeToRect: bounds ofView: sender preferredEdge: 1];
+            }
+        }
     }
 }
 
 //
-// Delegate action for "Update Status"
+// create_toggle_delegate: Creates a custom Objective-C object (of class "ToggleDelegate")
+// that implements the togglePopover: method.
 //
-extern "C" fn update_status_action(_this: &Object, _cmd: Sel, _sender: id) -> () {
-    send_notification("Update Status", "Status updated successfully.");
-}
-
-//
-// Delegate action for "Security Preferences..."
-//
-extern "C" fn open_security_prefs_action(_this: &Object, _cmd: Sel, _sender: id) -> () {
-    send_notification("Security Preferences", "Opening Security Preferences...");
-}
-
-//
-// Delegate action for "Quit" – sends a notification then terminates the app.
-//
-extern "C" fn quit_action(_this: &Object, _cmd: Sel, _sender: id) -> () {
-    send_notification("Quit", "Application is quitting.");
-    unsafe {
-        let app: id = NSApplication::sharedApplication(nil);
-        // Annotate the return type to help type inference.
-        let _: () = msg_send![app, terminate: nil];
-    }
-}
-
-//
-// Create an Objective-C class "AppDelegate" that implements updateStatus:,
-// openSecurityPrefs:, and quitAction:.
-//
-fn create_app_delegate() -> id {
+fn create_toggle_delegate() -> id {
     use objc::declare::ClassDecl;
     let superclass = class!(NSObject);
-    let mut decl = ClassDecl::new("AppDelegate", superclass).unwrap();
+    let mut decl = ClassDecl::new("ToggleDelegate", superclass).unwrap();
     unsafe {
         decl.add_method(
-            sel!(updateStatus:),
-            update_status_action as extern "C" fn(&Object, Sel, id) -> (),
-        );
-        decl.add_method(
-            sel!(openSecurityPrefs:),
-            open_security_prefs_action as extern "C" fn(&Object, Sel, id) -> (),
-        );
-        decl.add_method(
-            sel!(quitAction:),
-            quit_action as extern "C" fn(&Object, Sel, id) -> (),
+            sel!(togglePopover:),
+            togglePopover as extern "C" fn(&Object, Sel, id) -> (),
         );
     }
     decl.register();
-    unsafe { msg_send![class!(AppDelegate), new] }
+    unsafe { msg_send![class!(ToggleDelegate), new] }
 }
 
 //
-// Main: Set up the tray icon and menu
+// create_popover_content_view: Constructs the popover's content view.
+// This function creates a view with a visual effect background, header, dummy scroll view, and footer.
+// (This is a best-effort imperative translation of your SwiftUI design. Adjust frames as needed.)
 //
-fn main() {
+fn create_popover_content_view() -> id {
     unsafe {
-        // Create an autorelease pool.
-        let _pool = NSAutoreleasePool::new(nil);
-        let app = NSApplication::sharedApplication(nil);
+        // Create the main content view frame.
+        let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(420.0, 400.0));
+        let content_view: id = msg_send![class!(NSView), alloc];
+        let content_view: id = msg_send![content_view, initWithFrame: frame];
 
-        // --- SETUP STATUS ITEM (TRAY ICON) ---
+        // --- Background: Visual Effect View ---
+        let effect_view: id = msg_send![class!(NSVisualEffectView), alloc];
+        let effect_view: id = msg_send![effect_view, initWithFrame: frame];
+        let _: () = msg_send![effect_view, setMaterial: 9]; // material 9 (approx. "menu")
+        let _: () = msg_send![effect_view, setBlendingMode: 0];
+        let _: () = msg_send![effect_view, setState: 1];
+        let _: () = msg_send![content_view, addSubview: effect_view];
+
+        // --- Header ---
+        let header_frame = NSRect::new(NSPoint::new(12.0, 360.0), NSSize::new(396.0, 30.0));
+        let header: id = msg_send![class!(NSTextField), alloc];
+        let header: id = msg_send![header, initWithFrame: header_frame];
+        let header_str = NSString::alloc(nil).init_str("Security Status");
+        let _: () = msg_send![header, setStringValue: header_str];
+        let _: () = msg_send![header, setBezeled: NO];
+        let _: () = msg_send![header, setDrawsBackground: NO];
+        let _: () = msg_send![header, setEditable: NO];
+        let _: () = msg_send![header, setSelectable: NO];
+        let _: () = msg_send![content_view, addSubview: header];
+
+        // --- Divider ---
+        let divider_frame = NSRect::new(NSPoint::new(12.0, 350.0), NSSize::new(396.0, 1.0));
+        let divider: id = msg_send![class!(NSBox), alloc];
+        let divider: id = msg_send![divider, initWithFrame: divider_frame];
+        let _: () = msg_send![divider, setBoxType: 1]; // separator style
+        let _: () = msg_send![content_view, addSubview: divider];
+
+        // --- Dummy Menu Items List (Scroll View) ---
+        let scroll_frame = NSRect::new(NSPoint::new(12.0, 100.0), NSSize::new(396.0, 240.0));
+        let scroll_view: id = msg_send![class!(NSScrollView), alloc];
+        let scroll_view: id = msg_send![scroll_view, initWithFrame: scroll_frame];
+        let doc_frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(396.0, 240.0));
+        let doc_view: id = msg_send![class!(NSView), alloc];
+        let doc_view: id = msg_send![doc_view, initWithFrame: doc_frame];
+
+        // Create three dummy rows.
+        for i in 0..3 {
+            let row_y = 240.0 - ((i + 1) as f64 * 50.0);
+            let row_frame = NSRect::new(NSPoint::new(0.0, row_y), NSSize::new(396.0, 40.0));
+            let row: id = msg_send![class!(NSView), alloc];
+            let row: id = msg_send![row, initWithFrame: row_frame];
+
+            // Row label.
+            let label_frame = NSRect::new(NSPoint::new(10.0, 10.0), NSSize::new(300.0, 20.0));
+            let label: id = msg_send![class!(NSTextField), alloc];
+            let label: id = msg_send![label, initWithFrame: label_frame];
+            let text = NSString::alloc(nil).init_str(&format!("Menu Item {}", i + 1));
+            let _: () = msg_send![label, setStringValue: text];
+            let _: () = msg_send![label, setBezeled: NO];
+            let _: () = msg_send![label, setDrawsBackground: NO];
+            let _: () = msg_send![label, setEditable: NO];
+            let _: () = msg_send![label, setSelectable: NO];
+            let _: () = msg_send![row, addSubview: label];
+
+            // Circular indicator.
+            let circle_frame = NSRect::new(NSPoint::new(320.0, 10.0), NSSize::new(20.0, 20.0));
+            let circle: id = msg_send![class!(NSView), alloc];
+            let circle: id = msg_send![circle, initWithFrame: circle_frame];
+            let _: () = msg_send![circle, setWantsLayer: YES];
+            let layer: id = msg_send![circle, layer];
+            let nscolor: id = msg_send![class!(NSColor), systemGreenColor];
+            let _: () = msg_send![layer, setBackgroundColor: nscolor];
+            let _: () = msg_send![layer, setCornerRadius: 10.0];
+            let _: () = msg_send![row, addSubview: circle];
+
+            let _: () = msg_send![doc_view, addSubview: row];
+        }
+        let _: () = msg_send![scroll_view, setDocumentView: doc_view];
+        let _: () = msg_send![content_view, addSubview: scroll_view];
+
+        // --- Footer ---
+        let footer_frame = NSRect::new(NSPoint::new(12.0, 12.0), NSSize::new(396.0, 60.0));
+        let footer: id = msg_send![class!(NSView), alloc];
+        let footer: id = msg_send![footer, initWithFrame: footer_frame];
+
+        // Logo image view.
+        let logo_frame = NSRect::new(NSPoint::new(10.0, 20.0), NSSize::new(40.0, 40.0));
+        let logo: id = msg_send![class!(NSImageView), alloc];
+        let logo: id = msg_send![logo, initWithFrame: logo_frame];
+        let logo_str = NSString::alloc(nil).init_str("app.fill");
+        let logo_img: id = msg_send![class!(NSImage), imageWithSystemSymbolName: logo_str accessibilityDescription: nil];
+        let _: () = msg_send![logo, setImage: logo_img];
+        let _: () = msg_send![logo_img, setTemplate: YES];
+        let _: () = msg_send![footer, addSubview: logo];
+
+        // Version label.
+        let version_frame = NSRect::new(NSPoint::new(60.0, 30.0), NSSize::new(100.0, 20.0));
+        let version: id = msg_send![class!(NSTextField), alloc];
+        let version: id = msg_send![version, initWithFrame: version_frame];
+        let version_str = NSString::alloc(nil).init_str("v4.7.5");
+        let _: () = msg_send![version, setStringValue: version_str];
+        let _: () = msg_send![version, setBezeled: NO];
+        let _: () = msg_send![version, setDrawsBackground: NO];
+        let _: () = msg_send![version, setEditable: NO];
+        let _: () = msg_send![version, setSelectable: NO];
+        let _: () = msg_send![footer, addSubview: version];
+
+        // Refresh button.
+        let button_frame = NSRect::new(NSPoint::new(320.0, 20.0), NSSize::new(60.0, 30.0));
+        let refresh: id = msg_send![class!(NSButton), alloc];
+        let refresh: id = msg_send![refresh, initWithFrame: button_frame];
+        let btn_title = NSString::alloc(nil).init_str("Refresh");
+        let _: () = msg_send![refresh, setTitle: btn_title];
+        let _: () = msg_send![footer, addSubview: refresh];
+
+        let _: () = msg_send![content_view, addSubview: footer];
+
+        content_view
+    }
+}
+
+//
+// create_popover_view_controller: Wraps our content view in an NSViewController.
+//
+fn create_popover_view_controller() -> id {
+    unsafe {
+        let view = create_popover_content_view();
+        let vc: id = msg_send![class!(NSViewController), alloc];
+        let vc: id = msg_send![vc, init];
+        let _: () = msg_send![vc, setView: view];
+        vc
+    }
+}
+
+//
+// setup_status_item_and_popover: Creates the tray icon (status item) and associates a popover with it.
+//
+fn setup_status_item_and_popover() {
+    unsafe {
+        let _app = NSApplication::sharedApplication(nil);
         let status_bar: id = NSStatusBar::systemStatusBar(nil);
         let status_item: id = status_bar.statusItemWithLength_(NSVariableStatusItemLength);
 
-        // Create a system image using an SF Symbol ("shield.fill").
+        // Set the tray icon using "shield.fill".
         let symbol_name = NSString::alloc(nil).init_str("shield.fill");
-        let image: id =
-            msg_send![class!(NSImage), imageWithSystemSymbolName: symbol_name accessibilityDescription: nil];
+        let image: id = msg_send![class!(NSImage), imageWithSystemSymbolName: symbol_name accessibilityDescription: nil];
         let _: () = msg_send![status_item, setImage: image];
-        let _: () = msg_send![image, setTemplate: true];
+        let _: () = msg_send![image, setTemplate: YES];
 
-        // --- SETUP APP DELEGATE FOR MENU ACTIONS ---
-        let delegate: id = create_app_delegate();
+        // Create an NSPopover.
+        let popover: id = msg_send![class!(NSPopover), alloc];
+        let popover: id = msg_send![popover, init];
+        let vc = create_popover_view_controller();
+        let _: () = msg_send![popover, setContentViewController: vc];
 
-        // --- CREATE AN NSMENU ---
-        let menu: id = NSMenu::new(nil);
+        // Store the popover in our global variable.
+        GLOBAL_POPOVER = popover;
 
-        // "Update Status" menu item.
-        let update_title = NSString::alloc(nil).init_str("Update Status");
-        let update_item: id = NSMenuItem::alloc(nil)
-            .initWithTitle_action_keyEquivalent_(update_title, sel!(updateStatus:), NSString::alloc(nil).init_str(""));
-        let _: () = msg_send![update_item, setTarget: delegate];
-        let update_icon_name = NSString::alloc(nil).init_str("arrow.clockwise");
-        let update_image: id =
-            msg_send![class!(NSImage), imageWithSystemSymbolName: update_icon_name accessibilityDescription: nil];
-        let _: () = msg_send![update_item, setImage: update_image];
-        let _: () = msg_send![update_image, setTemplate: true];
-        menu.addItem_(update_item);
+        // Create a toggle delegate.
+        let toggle_delegate: id = create_toggle_delegate();
 
-        // "Security Preferences..." menu item.
-        let prefs_title = NSString::alloc(nil).init_str("Security Preferences...");
-        let prefs_item: id = NSMenuItem::alloc(nil)
-            .initWithTitle_action_keyEquivalent_(prefs_title, sel!(openSecurityPrefs:), NSString::alloc(nil).init_str(""));
-        let _: () = msg_send![prefs_item, setTarget: delegate];
-        let prefs_icon_name = NSString::alloc(nil).init_str("gearshape.fill");
-        let prefs_image: id =
-            msg_send![class!(NSImage), imageWithSystemSymbolName: prefs_icon_name accessibilityDescription: nil];
-        let _: () = msg_send![prefs_item, setImage: prefs_image];
-        let _: () = msg_send![prefs_image, setTemplate: true];
-        menu.addItem_(prefs_item);
+        // Set the status item button's target and action.
+        let button: id = msg_send![status_item, button];
+        if button != nil {
+            let _: () = msg_send![button, setTarget: toggle_delegate];
+            let _: () = msg_send![button, setAction: sel!(togglePopover:)];
+        }
 
-        // Add a separator.
-        let separator: id = msg_send![class!(NSMenuItem), separatorItem];
-        menu.addItem_(separator);
-
-        // "Quit" menu item.
-        let quit_title = NSString::alloc(nil).init_str("Quit");
-        let quit_item: id = NSMenuItem::alloc(nil)
-            .initWithTitle_action_keyEquivalent_(quit_title, sel!(quitAction:), NSString::alloc(nil).init_str("q"));
-        let _: () = msg_send![quit_item, setTarget: delegate];
-        let quit_icon_name = NSString::alloc(nil).init_str("xmark.circle.fill");
-        let quit_image: id =
-            msg_send![class!(NSImage), imageWithSystemSymbolName: quit_icon_name accessibilityDescription: nil];
-        let _: () = msg_send![quit_item, setImage: quit_image];
-        let _: () = msg_send![quit_image, setTemplate: true];
-        menu.addItem_(quit_item);
-
-        // --- ASSIGN THE MENU TO THE STATUS ITEM ---
-        let _: () = msg_send![status_item, setMenu: menu];
-
-        // Activate the application so the tray icon becomes active.
         NSRunningApplication::currentApplication(nil)
             .activateWithOptions_(NSApplicationActivateIgnoringOtherApps);
+    }
+}
 
-        // Run the application event loop.
+//
+// Main entry point.
+//
+fn main() {
+    unsafe {
+        let _pool = NSAutoreleasePool::new(nil);
+        let app = NSApplication::sharedApplication(nil);
+        app.setActivationPolicy_(cocoa::appkit::NSApplicationActivationPolicyRegular);
+        setup_status_item_and_popover();
         app.run();
     }
 }
