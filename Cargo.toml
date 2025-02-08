@@ -9,4 +9,5 @@ objc = "0.2"
 
 [package.metadata.bundle]
 identifier = "com.example.tray"
-# icon = "resources/icon.icns"  # Optionally specify an icon file
+# Optionally, specify an icon file (in .icns format)
+# icon = "resources/icon.icns"
