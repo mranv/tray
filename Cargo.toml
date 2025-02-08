@@ -8,5 +8,10 @@ cocoa = "0.26"
 objc = "0.2"
 
 [package.metadata.bundle]
+# name = "SecurityStatus"
 identifier = "com.example.tray"
 icon = ["resources/icon.icns"]
+# version = "1.0.0"
+# copyright = "Copyright (c) 2024 Anubhav Gain"
+# category = "public.app-category.utilities"
+# short_description = "Security Status Monitor"
